@@ -145,28 +145,17 @@ void CampusSystem::run(const AcademicManager& academic, const string& student_id
 		userMenu(index);
 }
 
-// 管理员菜单包含账户管理和充值。
+// academic 提供学籍资料。管理端按开卡、单卡业务和全量账务组织入口。
 void CampusSystem::adminMenu(const AcademicManager& academic) {
 	while (true) {
 		cout << "\n---------- 消费管理 ----------\n"
-			 << "1. 按学号开卡\n2. 显示全部校园卡\n3. 查询校园卡\n"
-			 << "4. 充值\n5. 挂失 / 解挂\n6. 流水查询\n7. 消费统计\n"
-			 << "8. 账本安全\n0. 返回平台\n";
-		int choice = readChoice("请选择：", 0, 8);
+			 << "1. 按学号开卡\n2. 按学号管理校园卡\n3. 账务管理\n0. 返回平台\n";
+		int choice = readChoice("请选择：", 0, 3);
 		if (choice <= 0) return;
 		switch (choice) {
 			case 1: addUser(academic); break;
-			case 2: listUsers(); break;
-			case 3: queryUser(); break;
-			case 4: recharge(); break;
-			case 5: {
-				int index = selectUser();
-				if (index != -1) changeLost(index, true);
-				break;
-			}
-			case 6: queryRecords(); break;
-			case 7: statistics(); break;
-			case 8: securityMenu(); break;
+			case 2: manageCard(); break;
+			case 3: accountingMenu(); break;
 		}
 	}
 }
@@ -186,18 +175,6 @@ void CampusSystem::userMenu(int index) {
 			case 4: changeLost(index, false); break;
 		}
 	}
-}
-
-// 通过学号选择校园卡。无此卡或取消时返回 -1。
-int CampusSystem::selectUser() const {
-	string student_id;
-	cout << "学号：";
-	if (!getline(cin, student_id) || student_id.empty())
-		return -1;
-	int index = findUser(student_id);
-	if (index == -1)
-		cout << "校园卡不存在。\n";
-	return index;
 }
 
 // academic 提供在校学生资料。开卡只建立余额为零的业务记录，保存失败时撤销。
@@ -224,28 +201,39 @@ void CampusSystem::addUser(const AcademicManager& academic) {
 		users.pop_back();
 }
 
-// 管理员查看所有账户。用CardHolder引用调用虚函数，显示Consumer的完整资料。
-void CampusSystem::listUsers() {
-	cout << "账户总数：" << users.size() << endl;
-	for (size_t i = 0; i < users.size(); ++i) {
-		cout << "--------------------\n";
-		const CardHolder& user = users[i];
-		user.showInfo();
+// 学号确定本次操作的校园卡。先展示资料，再允许充值、处理挂失和查询流水。
+// 旧账本中已注销的卡仍可按原学号查看历史流水。
+void CampusSystem::manageCard() {
+	string student_id;
+	cout << "学号（留空返回）：";
+	if (!getline(cin, student_id) || student_id.empty())
+		return;
+
+	int index = findUser(student_id);
+	if (index == -1) {
+		cout << "校园卡不存在。\n";
+		if (idUsed(student_id))
+			showRecords(student_id);
+		return;
 	}
-}
-// 按学号显示一个账户的资料，不修改余额和流水。
-void CampusSystem::queryUser() {
-	int index = selectUser();
-	if (index != -1) {
-		const CardHolder& user = users[index];
-		user.showInfo();
+
+	while (true) {
+		cout << "\n---------- 校园卡详情 ----------\n";
+		const CardHolder& card = users[index];
+		card.showInfo();
+		cout << "1. 为该卡充值\n2. 挂失 / 解挂\n3. 查看该卡流水\n0. 返回\n";
+		int choice = readChoice("请选择：", 0, 3);
+		if (choice <= 0) return;
+		switch (choice) {
+			case 1: recharge(index); break;
+			case 2: changeLost(index, true); break;
+			case 3: showRecords(student_id); break;
+		}
 	}
 }
 
-// 选择账户和充值金额，再交给 trade 记账。
-void CampusSystem::recharge() {
-	int index = selectUser();
-	if (index == -1) return;
+// index 是管理员已确认的校园卡下标。读取金额后交给 trade 记账。
+void CampusSystem::recharge(int index) {
 	long amount = readMoney("充值金额（元）：");
 	if (amount <= 0) return;
 	trade(index, 1, 0, amount);
@@ -311,18 +299,6 @@ void CampusSystem::showRecords(const string& student_id) {
 		}
 	}
 	cout << "共 " << count << " 条流水。\n";
-}
-
-// 管理员选择查询全部历史，或按一个学号筛选流水。
-void CampusSystem::queryRecords() {
-	int choice = readChoice("1. 全部流水  2. 按学号查询  0. 取消：", 0, 2);
-	if (choice <= 0) return;
-	if (choice == 1) showRecords("");
-	else {
-		string student_id;
-		cout << "查询学号：";
-		if (getline(cin, student_id) && !student_id.empty()) showRecords(student_id);
-	}
 }
 
 // 按月份或全部历史统计充值、消费及场景合计，当前总余额另行计算。
@@ -395,18 +371,23 @@ bool CampusSystem::checkLedger(bool checkAll) const {
 	return true;
 }
 
-// 提供账本日志查看和全量核对。核对结果同时写入日志。
-void CampusSystem::securityMenu() {
+// 集中处理跨校园卡的流水、统计和安全日志。全量核对的结果写入安全日志。
+void CampusSystem::accountingMenu() {
 	while (true) {
-		cout << "\n---------- 安全管理 ----------\n"
-			 << "1. 查看安全日志\n2. 检查全部流水\n0. 返回\n";
-		int choice = readChoice("请选择：", 0, 2);
+		cout << "\n---------- 账务管理 ----------\n"
+			 << "1. 查看全部流水\n2. 消费统计\n3. 查看安全日志\n4. 检查全部流水\n0. 返回\n";
+		int choice = readChoice("请选择：", 0, 4);
 		if (choice <= 0) return;
-		if (choice == 1) securityLog.show();
-		else {
-			bool ok = checkLedger(true);
-			if (ok) cout << "账目检查通过。\n";
-			securityLog.write("system", ok ? "全量对账通过" : "账目异常");
+		switch (choice) {
+			case 1: showRecords(""); break;
+			case 2: statistics(); break;
+			case 3: securityLog.show(); break;
+			case 4: {
+				bool ok = checkLedger(true);
+				if (ok) cout << "账目检查通过。\n";
+				securityLog.write("system", ok ? "全量对账通过" : "账目异常");
+				break;
+			}
 		}
 	}
 }

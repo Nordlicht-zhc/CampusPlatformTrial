@@ -40,10 +40,15 @@ private:
 	LoginGuard login_guard;
 
 	Account* find(const std::string& username);
+	bool studentIdInUse(const std::string& student_id)const;
+	static bool validUsername(const std::string& username);
 	bool save()const;
 	void addAccount(const AcademicManager& academic);
 	void editAccount(const std::string& current_username);
 	bool updatePassword(Account& account);
+	static bool readNewPassword(Account& account);
+	static bool storePassword(Account& account, const std::string& password);
+	static bool checkPassword(const Account& account, const std::string& password);
 
 public:
 	bool load();

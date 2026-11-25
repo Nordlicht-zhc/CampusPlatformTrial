@@ -1,4 +1,4 @@
-// 系统管理类把账户、流水、登录状态和菜单操作放在一起协调。
+// 管理校园卡、消费流水、账本日志和对应的操作菜单。
 #ifndef CAMPUS_SYSTEM_H
 #define CAMPUS_SYSTEM_H
 #include "User.h"
@@ -21,21 +21,18 @@ private:
 	bool load();
 	bool save();
 	bool checkLedger(bool checkAll) const;
-	void securityMenu();
+	void accountingMenu();
 	int findUser(const std::string& student_id) const;
 	bool idUsed(const std::string& studentId) const;
-	int selectUser() const;
 	void adminMenu(const AcademicManager& academic);
 	void userMenu(int index);
 	void addUser(const AcademicManager& academic);
-	void listUsers();
-	void queryUser();
-	void recharge();
+	void manageCard();
+	void recharge(int index);
 	void changeLost(int index, bool admin);
 	void consume(int index);
 	void trade(int index, int type, int place, long amount);
 	void showRecords(const std::string& student_id);
-	void queryRecords();
 	void statistics();
 public:
 	// run是对外入口，其余业务作为内部成员，避免绕过菜单随意调用。
