@@ -1,0 +1,507 @@
+#include "AcademicManager.h"
+#include "Utils.h"
+#include <fstream>
+#include <algorithm>
+#include <windows.h>
+using namespace std;
+
+// 确保数据目录存在，Windows 下调用 CreateDirectory，目录已存在时返回失败可忽略
+static void ensureDir(const string& dir) {
+	CreateDirectoryA(dir.c_str(), NULL);
+}
+
+// 读取一个文本文件的全部非空行，兼容 CRLF 行尾
+static vector<string> readLines(const string& path) {
+	vector<string> lines;
+	ifstream in(path);
+	string line;
+	while (getline(in, line)) {
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		if (!line.empty()) lines.push_back(line);
+	}
+	return lines;
+}
+
+// 构造函数：记录数据目录并加载历史数据
+AcademicManager::AcademicManager(const string& dataDir) : dataDir(dataDir) {
+	ensureDir(dataDir);
+	loadAll();
+}
+
+// 析构函数：释放多态容器中动态申请的人员对象
+AcademicManager::~AcademicManager() {
+	for (size_t i = 0; i < people.size(); ++i) delete people[i];
+}
+
+// 按编号查找人员下标，找不到返回 -1
+int AcademicManager::findPersonIndex(const string& id) const {
+	for (size_t i = 0; i < people.size(); ++i)
+		if (people[i]->getId() == id) return (int)i;
+	return -1;
+}
+
+// courseNo 是课程编号，返回匹配课程的下标，未找到时返回 -1。
+int AcademicManager::findCourseIndex(const string& courseNo) const {
+	for (size_t i = 0; i < courses.size(); ++i)
+		if (courses[i].getCourseNo() == courseNo) return (int)i;
+	return -1;
+}
+
+// 计算某学生所有已记录课程的平均分，无成绩时返回 0
+double AcademicManager::studentAverage(const string& id) const {
+	double sum = 0;
+	int count = 0;
+	for (size_t i = 0; i < scores.size(); ++i) {
+		if (scores[i].getStudentId() == id) {
+			sum += scores[i].getScore();
+			++count;
+		}
+	}
+	return count == 0 ? 0 : sum / count;
+}
+
+// 通过课程号换取课程名称，找不到时返回原编号
+string AcademicManager::courseNameOf(const string& courseNo) const {
+	int idx = findCourseIndex(courseNo);
+	return idx == -1 ? courseNo : courses[idx].getCourseName();
+}
+
+// 加载人员、课程和成绩，按类型标记创建对应子类
+void AcademicManager::loadAll() {
+	vector<string> personLines = readLines(dataDir + "/people.dat");
+	for (size_t i = 0; i < personLines.size(); ++i) {
+		const string& line = personLines[i];
+		if (line[0] == 'S') {
+			people.push_back(new Student(Student::parse(line)));
+		} else if (line[0] == 'T') {
+			people.push_back(new Teacher(Teacher::parse(line)));
+		}
+	}
+
+	vector<string> courseLines = readLines(dataDir + "/courses.dat");
+	for (size_t i = 0; i < courseLines.size(); ++i)
+		courses.push_back(Course::parse(courseLines[i]));
+
+	vector<string> scoreLines = readLines(dataDir + "/scores.dat");
+	for (size_t i = 0; i < scoreLines.size(); ++i)
+		scores.push_back(Score::parse(scoreLines[i]));
+
+}
+
+// 把人员、课程和成绩分别序列化写回对应文件
+void AcademicManager::saveAll() {
+	ofstream personOut(dataDir + "/people.dat");
+	for (size_t i = 0; i < people.size(); ++i)
+		personOut << people[i]->serialize() << endl;
+
+	ofstream courseOut(dataDir + "/courses.dat");
+	for (size_t i = 0; i < courses.size(); ++i)
+		courseOut << courses[i].serialize() << endl;
+
+	ofstream scoreOut(dataDir + "/scores.dat");
+	for (size_t i = 0; i < scores.size(); ++i)
+		scoreOut << scores[i].serialize() << endl;
+}
+
+// id 为学号。查到人员后检查其实际类型，学生和教师共用人员表。
+const Student* AcademicManager::getStudent(const string& id) const {
+	int index = findPersonIndex(id);
+	if (index == -1)
+		return nullptr;
+	return dynamic_cast<const Student*>(people[index]);
+}
+
+// 学业管理员进入管理菜单。学生通过本人学号查询，输入结束时结束本次菜单。
+void AcademicManager::run(const string& student_id, bool admin) {
+	try {
+		if (admin)
+			adminMenu();
+		else if (getStudent(student_id) != nullptr && getStudent(student_id)->isInSchool())
+			studentMenu(student_id);
+	} catch (const ios_base::failure&) {
+	}
+	if (admin)
+		saveAll();
+}
+
+// 录入新学生，学号查重通过后逐项采集信息
+void AcademicManager::addStudent() {
+	string id = readLine("学号：");
+	if (id.empty() || id == "-" || id.size() > 64 || id.find_first_of("| \t") != string::npos) {
+		cout << "请输入有效学号。" << endl;
+		return;
+	}
+	if (findPersonIndex(id) != -1) {
+		cout << "该学号已存在，不能重复录入。" << endl;
+		return;
+	}
+	string name = readLine("姓名：");
+	string gender = readLine("性别：");
+	int age = readInt("年龄：");
+	string phone = readLine("联系电话：");
+	string major = readLine("专业：");
+	string className = readLine("班级：");
+	int grade = readInt("入学年级：");
+	people.push_back(new Student(id, name, gender, age, phone,
+								 major, className, grade, true));
+	cout << "学生信息录入成功。" << endl;
+
+}
+
+// 查询学生：支持按学号精确查询或按姓名模糊查询
+void AcademicManager::queryStudent() {
+	int way = readInt("查询方式：1 按学号  2 按姓名，请选择：");
+	if (way == 1) {
+		string id = readLine("请输入学号：");
+		int idx = findPersonIndex(id);
+		if (idx == -1) {
+			cout << "未找到该学生。" << endl;
+			return;
+		}
+		Student* s = dynamic_cast<Student*>(people[idx]);
+		if (s == NULL) {
+			cout << "该编号不是学生。" << endl;
+			return;
+		}
+		cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
+		s->showInfo();
+		queryScoreByStudent(id);
+	} else {
+		string name = readLine("请输入姓名关键字：");
+		bool found = false;
+		for (size_t i = 0; i < people.size(); ++i) {
+			Student* s = dynamic_cast<Student*>(people[i]);
+			if (s != NULL && s->getName().find(name) != string::npos) {
+				if (!found)
+					cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
+				s->showInfo();
+				found = true;
+			}
+		}
+		if (!found) cout << "未找到匹配的学生。" << endl;
+	}
+}
+
+// 修改学生信息，按字段子菜单定点修改，避免整表重录
+void AcademicManager::modifyStudent() {
+	string id = readLine("请输入要修改的学生学号：");
+	int idx = findPersonIndex(id);
+	if (idx == -1) {
+		cout << "未找到该学生。" << endl;
+		return;
+	}
+	Student* s = dynamic_cast<Student*>(people[idx]);
+	if (s == NULL) {
+		cout << "该编号不是学生。" << endl;
+		return;
+	}
+	cout << "当前信息：" << endl;
+	s->showInfo();
+	int field = readInt("修改项：1 姓名 2 年龄 3 电话 4 专业 5 班级：");
+	switch (field) {
+		case 1: s->setName(readLine("新姓名：")); break;
+		case 2: s->setAge(readInt("新年龄：")); break;
+		case 3: s->setPhone(readLine("新电话：")); break;
+		case 4: s->setMajor(readLine("新专业：")); break;
+		case 5: s->setClassName(readLine("新班级：")); break;
+		default: cout << "选项无效。" << endl; return;
+	}
+	cout << "修改完成。" << endl;
+}
+
+// 办理退学时保留学号和业务记录，以便核对已有成绩、借阅和流水。
+void AcademicManager::removeStudent() {
+	string id = readLine("请输入学生学号：");
+	int index = findPersonIndex(id);
+	Student* student = index == -1 ? nullptr : dynamic_cast<Student*>(people[index]);
+	if (student == nullptr) {
+		cout << "未找到该学生。" << endl;
+		return;
+	}
+
+	if (readLine("确认办理退学请输入 yes：") == "yes") {
+		student->setInSchool(false);
+		cout << "已办理退学，学籍状态标记为已退学。" << endl;
+	}
+}
+
+// 显示学生列表，可选择全部或仅在校学生
+void AcademicManager::listStudents() {
+	int scope = readInt("显示范围：1 仅在校  2 全部(含退学)，请选择：");
+	cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
+	bool any = false;
+	for (size_t i = 0; i < people.size(); ++i) {
+		Student* s = dynamic_cast<Student*>(people[i]);
+		if (s == NULL) continue;
+		if (scope == 1 && !s->isInSchool()) continue;
+		s->showInfo();
+		any = true;
+	}
+	if (!any) cout << "暂无符合条件的学生记录。" << endl;
+}
+
+// 排序展示：先收集学生指针，再按所选关键字排序，不改动原始存储顺序
+void AcademicManager::sortStudents() {
+	vector<Student*> list;
+	for (size_t i = 0; i < people.size(); ++i) {
+		Student* s = dynamic_cast<Student*>(people[i]);
+		if (s != NULL && s->isInSchool()) list.push_back(s);
+	}
+	if (list.empty()) {
+		cout << "暂无在校学生。" << endl;
+		return;
+	}
+	int key = readInt("排序方式：1 按学号 2 按姓名 3 按平均分，请选择：");
+	if (key == 1) {
+		sort(list.begin(), list.end(),
+			 [](Student* a, Student* b) { return a->getId() < b->getId(); });
+	} else if (key == 2) {
+		sort(list.begin(), list.end(),
+			 [](Student* a, Student* b) { return a->getName() < b->getName(); });
+	} else if (key == 3) {
+		sort(list.begin(), list.end(), [this](Student* a, Student* b) {
+			return studentAverage(a->getId()) > studentAverage(b->getId());
+		});
+	} else {
+		cout << "选项无效。" << endl;
+		return;
+	}
+	cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
+	for (size_t i = 0; i < list.size(); ++i) list[i]->showInfo();
+}
+
+// 录入教师
+void AcademicManager::addTeacher() {
+	string id = readLine("工号：");
+	if (findPersonIndex(id) != -1) {
+		cout << "该工号已存在。" << endl;
+		return;
+	}
+	string name = readLine("姓名：");
+	string gender = readLine("性别：");
+	int age = readInt("年龄：");
+	string phone = readLine("电话：");
+	string title = readLine("职称：");
+	string college = readLine("院系：");
+	people.push_back(new Teacher(id, name, gender, age, phone, title, college));
+	cout << "教师信息录入成功。" << endl;
+}
+
+// 显示全部教师
+void AcademicManager::listTeachers() {
+	cout << "工号\t姓名\t性别\t年龄\t电话\t职称\t院系" << endl;
+	bool any = false;
+	for (size_t i = 0; i < people.size(); ++i) {
+		Teacher* t = dynamic_cast<Teacher*>(people[i]);
+		if (t != NULL) {
+			t->showInfo();
+			any = true;
+		}
+	}
+	if (!any) cout << "暂无教师记录。" << endl;
+}
+
+// 录入课程，课程号查重
+void AcademicManager::addCourse() {
+	string no = readLine("课程编号：");
+	if (findCourseIndex(no) != -1) {
+		cout << "该课程编号已存在。" << endl;
+		return;
+	}
+	string name = readLine("课程名称：");
+	double credit = readDouble("学分：");
+	int hours = readInt("学时：");
+	courses.push_back(Course(no, name, credit, hours));
+	cout << "课程录入成功。" << endl;
+}
+
+// 显示全部课程
+void AcademicManager::listCourses() {
+	cout << "课程编号\t课程名称\t学分\t学时" << endl;
+	if (courses.empty())
+		cout << "暂无课程记录。" << endl;
+	for (size_t i = 0; i < courses.size(); ++i) courses[i].showInfo();
+}
+
+// 录入成绩，校验学生、课程是否存在以及成绩范围，重复录入则更新
+void AcademicManager::addScore() {
+	string sid = readLine("学号：");
+	int personIdx = findPersonIndex(sid);
+	if (personIdx == -1 || dynamic_cast<Student*>(people[personIdx]) == NULL) {
+		cout << "学生不存在。" << endl;
+		return;
+	}
+	string cno = readLine("课程编号：");
+	if (findCourseIndex(cno) == -1) {
+		cout << "课程不存在。" << endl;
+		return;
+	}
+	double value = readDouble("成绩(0-100)：");
+	if (value < 0 || value > 100) {
+		cout << "成绩超出合法范围。" << endl;
+		return;
+	}
+	string term = readLine("学期(如 2026-1)：");
+	for (size_t i = 0; i < scores.size(); ++i) {
+		if (scores[i].getStudentId() == sid && scores[i].getCourseNo() == cno) {
+			scores[i].setScore(value);
+			scores[i].setTerm(term);
+			cout << "原成绩已更新。" << endl;
+			return;
+		}
+	}
+	scores.push_back(Score(sid, cno, term, value));
+	cout << "成绩录入成功。" << endl;
+}
+
+// 查询某学生的全部成绩，并汇总平均分
+void AcademicManager::queryScoreByStudent(const string& id) {
+	cout << "课程编号\t课程名称\t学期\t成绩" << endl;
+	int count = 0;
+	double sum = 0;
+	for (size_t i = 0; i < scores.size(); ++i) {
+		if (scores[i].getStudentId() == id) {
+			const Score& g = scores[i];
+			cout << g.getCourseNo() << "\t" << courseNameOf(g.getCourseNo())
+				 << "\t" << g.getTerm() << "\t" << g.getScore() << endl;
+			sum += g.getScore();
+			++count;
+		}
+	}
+	if (count == 0) {
+		cout << "暂无成绩记录。" << endl;
+	} else {
+		cout << "共 " << count << " 门课程，平均分：" << sum / count << endl;
+	}
+}
+
+// 按课程查询所有学生成绩
+void AcademicManager::queryScoreByCourse() {
+	string cno = readLine("请输入课程编号：");
+	if (findCourseIndex(cno) == -1) {
+		cout << "课程不存在。" << endl;
+		return;
+	}
+	cout << "学号\t课程名称\t学期\t成绩" << endl;
+	bool any = false;
+	for (size_t i = 0; i < scores.size(); ++i) {
+		if (scores[i].getCourseNo() == cno) {
+			const Score& g = scores[i];
+			cout << g.getStudentId() << "\t" << courseNameOf(cno) << "\t"
+				 << g.getTerm() << "\t" << g.getScore() << endl;
+			any = true;
+		}
+	}
+	if (!any) cout << "该课程暂无成绩。" << endl;
+}
+
+// 课程成绩统计：人数、平均、最高、最低、及格率
+void AcademicManager::courseStatistics() {
+	string cno = readLine("请输入课程编号：");
+	if (findCourseIndex(cno) == -1) {
+		cout << "课程不存在。" << endl;
+		return;
+	}
+	int count = 0, pass = 0;
+	double sum = 0, maxV = -1, minV = 101;
+	for (size_t i = 0; i < scores.size(); ++i) {
+		if (scores[i].getCourseNo() == cno) {
+			double v = scores[i].getScore();
+			sum += v;
+			++count;
+			if (v >= 60) ++pass;
+			if (v > maxV) maxV = v;
+			if (v < minV) minV = v;
+		}
+	}
+	if (count == 0) {
+		cout << "该课程暂无成绩数据。" << endl;
+		return;
+	}
+	cout << "课程：" << courseNameOf(cno) << endl;
+	cout << "参考人数：" << count << endl;
+	cout << "平均分：" << sum / count << endl;
+	cout << "最高分：" << maxV << endl;
+	cout << "最低分：" << minV << endl;
+	cout << "及格率：" << (double)pass / count * 100 << "%" << endl;
+}
+
+// 学生成绩排名：在校学生按平均分从高到低输出名次
+void AcademicManager::showRanking() {
+	vector<Student*> list;
+	for (size_t i = 0; i < people.size(); ++i) {
+		Student* s = dynamic_cast<Student*>(people[i]);
+		if (s != NULL && s->isInSchool()) list.push_back(s);
+	}
+	if (list.empty()) {
+		cout << "暂无在校学生。" << endl;
+		return;
+	}
+	sort(list.begin(), list.end(), [this](Student* a, Student* b) {
+		return studentAverage(a->getId()) > studentAverage(b->getId());
+	});
+	cout << "名次\t学号\t姓名\t班级\t平均分" << endl;
+	for (size_t i = 0; i < list.size(); ++i) {
+		cout << (i + 1) << "\t" << list[i]->getId() << "\t"
+			 << list[i]->getName() << "\t" << list[i]->getClassName() << "\t"
+			 << studentAverage(list[i]->getId()) << endl;
+	}
+}
+
+// 学生端菜单，按 student_id 查询本人资料和成绩
+void AcademicManager::studentMenu(const string& student_id) {
+	while (true) {
+		cout << endl << "===== 学生学业管理子系统(学生端) =====" << endl;
+		cout << "1 查看本人信息  2 查看本人成绩  0 返回平台" << endl;
+		int choice = readInt("请选择：");
+		if (choice == 0) {
+			break;
+		}
+		switch (choice) {
+			case 1: {
+				int idx = findPersonIndex(student_id);
+				if (idx != -1) {
+					cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
+					people[idx]->showInfo();
+				} else {
+					cout << "未关联有效学生信息。" << endl;
+				}
+				break;
+			}
+			case 2: queryScoreByStudent(student_id); break;
+			default: cout << "选项无效。" << endl;
+		}
+	}
+}
+
+// 管理员端菜单，平铺全部管理功能
+void AcademicManager::adminMenu() {
+	while (true) {
+		cout << endl << "===== 学生学业管理子系统(管理端) =====" << endl;
+		cout << "1 录入学生   2 查询学生   3 修改学生   4 办理退学" << endl;
+		cout << "5 学生列表   6 排序展示   7 录入教师   8 教师列表" << endl;
+		cout << "9 录入课程  10 课程列表  11 录入成绩  12 按课程查成绩" << endl;
+		cout << "13 成绩统计 14 成绩排名" << endl;
+		cout << "0 保存并返回平台" << endl;
+		int choice = readInt("请选择：");
+		switch (choice) {
+			case 1: addStudent(); break;
+			case 2: queryStudent(); break;
+			case 3: modifyStudent(); break;
+			case 4: removeStudent(); break;
+			case 5: listStudents(); break;
+			case 6: sortStudents(); break;
+			case 7: addTeacher(); break;
+			case 8: listTeachers(); break;
+			case 9: addCourse(); break;
+			case 10: listCourses(); break;
+			case 11: addScore(); break;
+			case 12: queryScoreByCourse(); break;
+			case 13: courseStatistics(); break;
+			case 14: showRanking(); break;
+			case 0:
+				return;
+			default: cout << "选项无效，请重新输入。" << endl;
+		}
+	}
+}
