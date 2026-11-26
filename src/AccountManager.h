@@ -27,9 +27,9 @@ struct Session {
 	}
 };
 
-// 账号在身份资料的基础上记录启用状态和验密所需的盐、哈希值。
+// 账号记录密码和启用状态，会话只保存身份和权限。
 struct Account : public Session {
-	std::string salt, password_hash;
+	std::string password;
 	bool active;
 };
 
@@ -45,10 +45,8 @@ private:
 	bool save()const;
 	void addAccount(const AcademicManager& academic);
 	void editAccount(const std::string& current_username);
-	bool updatePassword(Account& account);
+	void updatePassword(Account& account);
 	static bool readNewPassword(Account& account);
-	static bool storePassword(Account& account, const std::string& password);
-	static bool checkPassword(const Account& account, const std::string& password);
 
 public:
 	bool load();

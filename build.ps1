@@ -9,7 +9,7 @@ $sources = Get-ChildItem -LiteralPath $source_dir -Recurse -File -Filter '*.cpp'
     ForEach-Object FullName
 $exe = Join-Path $PSScriptRoot 'CampusPlatform.exe'
 
-& $compiler.Source -std=c++11 -O2 -Wall -Wextra -static @sources -o $exe -lbcrypt
+& $compiler.Source -std=c++11 -O2 -Wall -Wextra -static @sources -o $exe
 if ($LASTEXITCODE -ne 0) {
     throw "C++ build failed with exit code $LASTEXITCODE."
 }

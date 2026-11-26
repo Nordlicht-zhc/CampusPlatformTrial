@@ -151,6 +151,22 @@ static bool validDate(const string& date) {
 	return day <= limit;
 }
 
+// 借书和还书使用同一个本地日期来源。
+static bool getToday(tm& local, string& date) {
+	const time_t now = time(nullptr);
+	if (now == static_cast<time_t>(-1))
+		return false;
+	const tm* localDate = std::localtime(&now);
+	if (localDate == nullptr)
+		return false;
+	local = *localDate;
+	char text[11];
+	if (strftime(text, sizeof(text), "%Y-%m-%d", &local) == 0)
+		return false;
+	date = text;
+	return true;
+}
+
 // 借阅流水关联读者学号和书号，记录借出、到期、归还日期与流水号。
 // 流水由 LibSys 持有，退学或注销平台账号后仍用于核查借阅历史。
 class BorrowRecord {
@@ -278,25 +294,12 @@ private:
 	}
 	// 取本地日期为借出日，按当前借期计算到期日，成功后写到两个输出参数。
 	bool calculateLoanDates(string& borrowDate, string& dueDate) const {
-		const time_t now = time(nullptr);
-		if (now == static_cast<time_t>(-1))
-			return false;
-		tm local{};
-#ifdef _MSC_VER
-		if (::localtime_s(&local, &now) != 0)
-			return false;
-#else
-		const tm* localDate = std::localtime(&now);
-		if (localDate == nullptr)
-			return false;
-		local = *localDate;
-#endif
-
-		char start[11], end[11];
-		if (strftime(start, sizeof(start), "%Y-%m-%d", &local) == 0)
+		tm due{};
+		string start;
+		if (!getToday(due, start))
 			return false;
 
-		tm due = local;
+		char end[11];
 		due.tm_mday += loanDays;
 		due.tm_hour = 12;
 		due.tm_min = 0;
@@ -661,15 +664,30 @@ static void createSampleData(LibSys& library) {
 	);
 }
 
-// 读取指定读者的流水号和日期。管理员可用旧编号处理已归档读者的未还图书。
-static bool returnFromMenu(LibSys& library, const string& id) {
-	string recordID, returnDate;
+// 学生按当天日期还书，管理端可以补录历史归还日期。
+static bool returnFromMenu(LibSys& library, const string& id, bool admin) {
+	string recordID, today;
 
 	cout << "借阅流水号：";
 	if (!getline(cin, recordID)) return false;
 
-	cout << "归还日期（如 2026-01-31）：";
-	if (!getline(cin, returnDate)) return false;
+	tm local{};
+	if (!getToday(local, today)) {
+		cout << "无法读取今天的日期。\n";
+		return true;
+	}
+
+	string returnDate = today;
+	if (admin) {
+		cout << "归还日期（YYYY-MM-DD，留空使用今天）：";
+		if (!getline(cin, returnDate)) return false;
+		if (returnDate.empty())
+			returnDate = today;
+		if (!validDate(returnDate) || returnDate > today) {
+			cout << "请输入有效的归还日期，且日期不能晚于今天。\n";
+			return true;
+		}
+	}
 
 	cout << (library.returnBook(id, recordID, returnDate)
 		? "归还成功。\n"
@@ -793,7 +811,7 @@ static void adminMenu(LibSys& library) {
 		else if (choice == "6") {
 			string reader_id;
 			cout << "读者编号：";
-			if (!getline(cin, reader_id) || !returnFromMenu(library, reader_id))
+			if (!getline(cin, reader_id) || !returnFromMenu(library, reader_id, true))
 				return;
 		}
 		else {
@@ -835,7 +853,7 @@ static void readerMenu(LibSys& library, const string& id) {
 			}
 		}
 		else if (choice == "2") {
-			if (!returnFromMenu(library, id)) return;
+			if (!returnFromMenu(library, id, false)) return;
 		}
 		else if (choice == "3") {
 			library.displayReaderRecords(id);

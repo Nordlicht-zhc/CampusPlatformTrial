@@ -34,6 +34,9 @@ string Score::serialize() const {
 
 // 将 line 拆成四个成绩字段并转换分数，恢复一条存档记录。
 Score Score::parse(const string& line) {
-	vector<string> f = split(line, '|');
-	return Score(f[1], f[2], f[3], stod(f[4]));
+	vector<string> f = parseFields(line, "G", 5);
+	double value = parseDouble(f[4]);
+	if (value < 0 || value > 100)
+		throw invalid_argument("invalid score");
+	return Score(f[1], f[2], f[3], value);
 }

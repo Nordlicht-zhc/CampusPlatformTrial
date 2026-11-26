@@ -30,8 +30,10 @@ bool AccountManager::initialize() {
 	admin.username = "admin";
 	admin.permissions = AllPermissions;
 	admin.active = true;
-	if (!readNewPassword(admin))
-		return false;
+	while (!readNewPassword(admin)) {
+		if (!cin)
+			return false;
+	}
 	accounts.push_back(admin);
 	if (save())
 		return true;
@@ -53,7 +55,7 @@ bool AccountManager::login(Session& session) {
 	if (!readField("密码：", password, 128))
 		return false;
 
-	if (account == nullptr || !account->active || !checkPassword(*account, password)) {
+	if (account == nullptr || !account->active || account->password != password) {
 		cout << "用户名或密码错误，或账号已停用。\n";
 		if (account != nullptr && account->active && login_guard.recordFailure(username))
 			cout << "连续失败 5 次，账号锁定 60 秒。\n";
@@ -107,7 +109,7 @@ void AccountManager::addAccount(const AcademicManager& academic) {
 	Account account{};
 	if (!readField("用户名：", account.username, 32))
 		return;
-	if (!validUsername(account.username) || account.username == "0") {
+	if (!validUsername(account.username)) {
 		cout << "用户名无效。\n";
 		return;
 	}
@@ -117,10 +119,14 @@ void AccountManager::addAccount(const AcademicManager& academic) {
 	}
 	if (!readField("学号（管理账号可留空）：", account.student_id, 64))
 		return;
+	if (account.student_id == "-" || account.student_id.find_first_of(" \t\r\n\v\f") != string::npos) {
+		cout << "学号格式无效，请输入不含空白字符的有效学号。\n";
+		return;
+	}
 
 	if (!account.student_id.empty()) {
 		const Student* student = academic.getStudent(account.student_id);
-		if (student == nullptr || !student->isInSchool() || account.student_id == "-") {
+		if (student == nullptr || !student->isInSchool()) {
 			cout << "未找到可绑定的在校学生。\n";
 			return;
 		}
@@ -197,34 +203,33 @@ void AccountManager::changePassword(const Session& session) {
 	string password;
 	if (account == nullptr || !readField("当前密码：", password, 128))
 		return;
-	if (!checkPassword(*account, password)) {
+	if (account->password != password) {
 		cout << "当前密码错误。\n";
 		return;
 	}
 	updatePassword(*account);
 }
 
-// 保存新密码后清除锁定计数。写入失败时恢复原账号内容。
-bool AccountManager::updatePassword(Account& account) {
-	const Account old = account;
+// 保存新密码后清除锁定计数。写入失败时恢复原密码。
+void AccountManager::updatePassword(Account& account) {
+	const string old_password = account.password;
 	if (!readNewPassword(account))
-		return false;
+		return;
 	if (!save()) {
-		account = old;
-		return false;
+		account.password = old_password;
+		return;
 	}
 	login_guard.clear(account.username);
 	cout << "密码已更新。\n";
-	return true;
 }
 
-// 平台登录名允许字母、数字、下划线、短横线和点，限制为 1 到 32 个字符。
+// 登录名允许字母、数字、下划线、短横线和点。0 保留给登录菜单的返回操作。
 bool AccountManager::validUsername(const string& username) {
-	return !username.empty() && username.size() <= 32 &&
+	return !username.empty() && username.size() <= 32 && username != "0" &&
 		username.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") == string::npos;
 }
 
-// 新密码输入两遍，确认长度和一致性后生成验证值。
+// 新密码输入两遍，确认长度和一致性后赋给账号。
 bool AccountManager::readNewPassword(Account& account) {
 	string password, repeat;
 	if (!readField("新密码（至少 8 位）：", password, 128) ||
@@ -235,7 +240,8 @@ bool AccountManager::readNewPassword(Account& account) {
 		return false;
 	}
 
-	return storePassword(account, password);
+	account.password = password;
+	return true;
 }
 
 // username 为登录名。返回账号地址，找不到时返回空指针。

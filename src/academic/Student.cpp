@@ -41,16 +41,18 @@ string Student::serialize() const {
 
 // 反序列化：按分隔符切分后逐字段还原，stoi 完成字符串到数值的转换
 Student Student::parse(const string& line) {
-	vector<string> f = split(line, '|');
+	vector<string> f = parseFields(line, "S", 10);
+	if (f[9] != "0" && f[9] != "1")
+		throw invalid_argument("invalid student status");
 	Student s;
 	s.setId(f[1]);
 	s.setName(f[2]);
 	s.setGender(f[3]);
-	s.setAge(stoi(f[4]));
+	s.setAge(parseInt(f[4]));
 	s.setPhone(f[5]);
 	s.setMajor(f[6]);
 	s.setClassName(f[7]);
-	s.setGrade(stoi(f[8]));
+	s.setGrade(parseInt(f[8]));
 	s.setInSchool(f[9] == "1");
 	return s;
 }

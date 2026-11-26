@@ -2,6 +2,8 @@
 #include "Utils.h"
 #include <fstream>
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <windows.h>
 using namespace std;
 
@@ -10,22 +12,41 @@ static void ensureDir(const string& dir) {
 	CreateDirectoryA(dir.c_str(), NULL);
 }
 
-// 读取一个文本文件的全部非空行，兼容 CRLF 行尾
-static vector<string> readLines(const string& path) {
-	vector<string> lines;
+// 逐行读取记录，保留行号以便定位损坏的数据。
+template <class ParseLine>
+static bool readRecords(const string& path, ParseLine parseLine) {
+	errno = 0;
 	ifstream in(path);
-	string line;
-	while (getline(in, line)) {
-		if (!line.empty() && line.back() == '\r') line.pop_back();
-		if (!line.empty()) lines.push_back(line);
+	if (!in) {
+		if (errno == ENOENT)
+			return true;
+		cerr << "无法打开学业存档 " << path << "。\n";
+		return false;
 	}
-	return lines;
+	string line;
+	size_t lineNumber = 0;
+	while (getline(in, line)) {
+		++lineNumber;
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		if (line.empty()) continue;
+		try {
+			parseLine(line);
+		} catch (const logic_error&) {
+			cerr << "学业存档 " << path << " 第 " << lineNumber << " 行格式错误。\n";
+			return false;
+		}
+	}
+	if (in.bad() || !in.eof()) {
+		cerr << "读取学业存档 " << path << " 第 " << lineNumber + 1 << " 行失败。\n";
+		return false;
+	}
+	return true;
 }
 
 // 构造函数：记录数据目录并加载历史数据
 AcademicManager::AcademicManager(const string& dataDir) : dataDir(dataDir) {
 	ensureDir(dataDir);
-	loadAll();
+	dataReady = loadAll();
 }
 
 // 析构函数：释放多态容器中动态申请的人员对象
@@ -67,40 +88,61 @@ string AcademicManager::courseNameOf(const string& courseNo) const {
 }
 
 // 加载人员、课程和成绩，按类型标记创建对应子类
-void AcademicManager::loadAll() {
-	vector<string> personLines = readLines(dataDir + "/people.dat");
-	for (size_t i = 0; i < personLines.size(); ++i) {
-		const string& line = personLines[i];
-		if (line[0] == 'S') {
+bool AcademicManager::loadAll() {
+	const bool peopleReady = readRecords(dataDir + "/people.dat", [this](const string& line) {
+		if (line[0] == 'S')
 			people.push_back(new Student(Student::parse(line)));
-		} else if (line[0] == 'T') {
+		else if (line[0] == 'T')
 			people.push_back(new Teacher(Teacher::parse(line)));
-		}
+		else
+			throw invalid_argument("invalid person type");
+	});
+	if (!peopleReady) {
+		for (Person* person : people)
+			delete person;
+		people.clear();
 	}
 
-	vector<string> courseLines = readLines(dataDir + "/courses.dat");
-	for (size_t i = 0; i < courseLines.size(); ++i)
-		courses.push_back(Course::parse(courseLines[i]));
-
-	vector<string> scoreLines = readLines(dataDir + "/scores.dat");
-	for (size_t i = 0; i < scoreLines.size(); ++i)
-		scores.push_back(Score::parse(scoreLines[i]));
-
+	const bool coursesReady = readRecords(dataDir + "/courses.dat", [this](const string& line) {
+		courses.push_back(Course::parse(line));
+	});
+	const bool scoresReady = readRecords(dataDir + "/scores.dat", [this](const string& line) {
+		scores.push_back(Score::parse(line));
+	});
+	return peopleReady && coursesReady && scoresReady;
 }
 
-// 把人员、课程和成绩分别序列化写回对应文件
+// 三份临时文件都写完后，再依次替换人员、课程和成绩存档。
 void AcademicManager::saveAll() {
-	ofstream personOut(dataDir + "/people.dat");
-	for (size_t i = 0; i < people.size(); ++i)
-		personOut << people[i]->serialize() << endl;
+	const string paths[] = {dataDir + "/people.dat", dataDir + "/courses.dat", dataDir + "/scores.dat"};
+	const string tempPaths[] = {paths[0] + ".tmp", paths[1] + ".tmp", paths[2] + ".tmp"};
+	ofstream personOut(tempPaths[0]);
+	ofstream courseOut(tempPaths[1]);
+	ofstream scoreOut(tempPaths[2]);
+	for (const Person* person : people)
+		personOut << person->serialize() << '\n';
+	for (const Course& course : courses)
+		courseOut << course.serialize() << '\n';
+	for (const Score& score : scores)
+		scoreOut << score.serialize() << '\n';
+	personOut.close();
+	courseOut.close();
+	scoreOut.close();
 
-	ofstream courseOut(dataDir + "/courses.dat");
-	for (size_t i = 0; i < courses.size(); ++i)
-		courseOut << courses[i].serialize() << endl;
-
-	ofstream scoreOut(dataDir + "/scores.dat");
-	for (size_t i = 0; i < scores.size(); ++i)
-		scoreOut << scores[i].serialize() << endl;
+	if (!personOut || !courseOut || !scoreOut) {
+		const string& failed = !personOut ? paths[0] : !courseOut ? paths[1] : paths[2];
+		cerr << "学业存档 " << failed << " 写入失败。\n";
+	} else {
+		for (size_t i = 0; i < 3; ++i) {
+			if (!MoveFileExA(tempPaths[i].c_str(), paths[i].c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+				cerr << "学业存档 " << paths[i] << " 替换失败。\n";
+				break;
+			}
+		}
+	}
+	for (const string& path : tempPaths)
+		std::remove(path.c_str());
 }
 
 // id 为学号。查到人员后检查其实际类型，学生和教师共用人员表。
@@ -113,6 +155,10 @@ const Student* AcademicManager::getStudent(const string& id) const {
 
 // 学业管理员进入管理菜单。学生通过本人学号查询，输入结束时结束本次菜单。
 void AcademicManager::run(const string& student_id, bool admin) {
+	if (!dataReady) {
+		cout << "学业存档读取失败，学业功能暂不可用。\n";
+		return;
+	}
 	try {
 		if (admin)
 			adminMenu();
@@ -343,9 +389,9 @@ void AcademicManager::addScore() {
 	}
 	string term = readLine("学期(如 2026-1)：");
 	for (size_t i = 0; i < scores.size(); ++i) {
-		if (scores[i].getStudentId() == sid && scores[i].getCourseNo() == cno) {
+		if (scores[i].getStudentId() == sid && scores[i].getCourseNo() == cno &&
+				scores[i].getTerm() == term) {
 			scores[i].setScore(value);
-			scores[i].setTerm(term);
 			cout << "原成绩已更新。" << endl;
 			return;
 		}
@@ -371,7 +417,7 @@ void AcademicManager::queryScoreByStudent(const string& id) {
 	if (count == 0) {
 		cout << "暂无成绩记录。" << endl;
 	} else {
-		cout << "共 " << count << " 门课程，平均分：" << sum / count << endl;
+		cout << "共 " << count << " 条成绩，平均分：" << sum / count << endl;
 	}
 }
 
@@ -402,10 +448,11 @@ void AcademicManager::courseStatistics() {
 		cout << "课程不存在。" << endl;
 		return;
 	}
+	string term = readLine("统计学期（如 2026-1，留空统计全部学期）：");
 	int count = 0, pass = 0;
 	double sum = 0, maxV = -1, minV = 101;
 	for (size_t i = 0; i < scores.size(); ++i) {
-		if (scores[i].getCourseNo() == cno) {
+		if (scores[i].getCourseNo() == cno && (term.empty() || scores[i].getTerm() == term)) {
 			double v = scores[i].getScore();
 			sum += v;
 			++count;
@@ -415,11 +462,12 @@ void AcademicManager::courseStatistics() {
 		}
 	}
 	if (count == 0) {
-		cout << "该课程暂无成绩数据。" << endl;
+		cout << "所选范围内暂无成绩数据。" << endl;
 		return;
 	}
 	cout << "课程：" << courseNameOf(cno) << endl;
-	cout << "参考人数：" << count << endl;
+	cout << "统计学期：" << (term.empty() ? "全部" : term) << endl;
+	cout << "成绩条数：" << count << endl;
 	cout << "平均分：" << sum / count << endl;
 	cout << "最高分：" << maxV << endl;
 	cout << "最低分：" << minV << endl;

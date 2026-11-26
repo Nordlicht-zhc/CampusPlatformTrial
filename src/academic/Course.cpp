@@ -34,6 +34,6 @@ string Course::serialize() const {
 
 // 将 line 拆成课程字段，把学分和学时转为相应数值后构造课程。
 Course Course::parse(const string& line) {
-	vector<string> f = split(line, '|');
-	return Course(f[1], f[2], stod(f[3]), stoi(f[4]));
+	vector<string> f = parseFields(line, "C", 5);
+	return Course(f[1], f[2], parseDouble(f[3]), parseInt(f[4]));
 }

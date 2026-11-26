@@ -18,6 +18,7 @@ private:
 	vector<Course> courses;   // 课程容器
 	vector<Score> scores;     // 成绩容器
 	string dataDir;           // 数据文件目录
+	bool dataReady;           // 三份学业文件都成功读取后才开放学业模块
 
 	// 内部辅助函数，对外隐藏查找细节
 	int findPersonIndex(const string& id) const;
@@ -25,7 +26,7 @@ private:
 	double studentAverage(const string& id) const;       // 计算某学生的平均分
 	string courseNameOf(const string& courseNo) const;   // 按课程号查课程名
 
-	void loadAll();
+	bool loadAll();
 	void saveAll();
 	void adminMenu();
 	void studentMenu(const string& student_id);

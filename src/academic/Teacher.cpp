@@ -33,12 +33,12 @@ string Teacher::serialize() const {
 
 // 将 line 按竖线拆分并检查字段数量，再还原教师对象。
 Teacher Teacher::parse(const string& line) {
-	vector<string> f = split(line, '|');
+	vector<string> f = parseFields(line, "T", 8);
 	Teacher t;
 	t.setId(f[1]);
 	t.setName(f[2]);
 	t.setGender(f[3]);
-	t.setAge(stoi(f[4]));
+	t.setAge(parseInt(f[4]));
 	t.setPhone(f[5]);
 	t.setTitle(f[6]);
 	t.setCollege(f[7]);

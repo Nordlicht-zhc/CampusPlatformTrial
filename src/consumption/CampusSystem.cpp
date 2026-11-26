@@ -301,11 +301,25 @@ void CampusSystem::showRecords(const string& student_id) {
 	cout << "共 " << count << " 条流水。\n";
 }
 
+static bool validMonth(const string& month) {
+	if (month.size() != 7 || month[4] != '-')
+		return false;
+	string year = month.substr(0, 4);
+	string number = month.substr(5, 2);
+	const string digits = "0123456789";
+	return year != "0000" && year.find_first_not_of(digits) == string::npos &&
+		number.find_first_not_of(digits) == string::npos && number >= "01" && number <= "12";
+}
+
 // 按月份或全部历史统计充值、消费及场景合计，当前总余额另行计算。
 void CampusSystem::statistics() {
-	cout << "统计月份（YYYY-MM，输入 0 统计全部）：";
 	string month;
-	if (!getline(cin, month)) return;
+	while (true) {
+		cout << "统计月份（YYYY-MM，输入 0 统计全部）：";
+		if (!getline(cin, month)) return;
+		if (month == "0" || validMonth(month)) break;
+		cout << "月份无效，请按 YYYY-MM 格式输入，月份范围为 01 至 12。\n";
+	}
 	long long rechargeTotal = 0, consumeTotal = 0, places[5] = {0};
 	long long balances = 0;
 	int rechargeCount = 0, consumeCount = 0;

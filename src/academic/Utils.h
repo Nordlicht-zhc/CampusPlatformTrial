@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <cmath>
+#include <stdexcept>
 using namespace std;
 
 // 通用工具函数集合，集中处理文本分隔、输入保护等重复逻辑
@@ -23,6 +25,29 @@ inline vector<string> split(const string& line, char sep) {
 	}
 	result.push_back(field);
 	return result;
+}
+
+inline vector<string> parseFields(const string& line, const string& type, size_t count) {
+	vector<string> fields = split(line, '|');
+	if (fields.size() != count || fields[0] != type)
+		throw invalid_argument("invalid record");
+	return fields;
+}
+
+inline int parseInt(const string& text) {
+	size_t end = 0;
+	int value = stoi(text, &end);
+	if (end != text.size())
+		throw invalid_argument("invalid integer");
+	return value;
+}
+
+inline double parseDouble(const string& text) {
+	size_t end = 0;
+	double value = stod(text, &end);
+	if (end != text.size() || !std::isfinite(value))
+		throw invalid_argument("invalid number");
+	return value;
 }
 
 // 读取一整行输入，并去除首尾可能残留的空格
@@ -45,9 +70,7 @@ inline int readInt(const string& prompt) {
 	while (true) {
 		string s = readLine(prompt);
 		try {
-			size_t pos = 0;
-			int value = stoi(s, &pos);
-			if (pos == s.size()) return value;
+			return parseInt(s);
 		} catch (...) {
 		}
 		cout << "输入不合法，请重新输入一个整数。" << endl;
@@ -59,9 +82,7 @@ inline double readDouble(const string& prompt) {
 	while (true) {
 		string s = readLine(prompt);
 		try {
-			size_t pos = 0;
-			double value = stod(s, &pos);
-			if (pos == s.size()) return value;
+			return parseDouble(s);
 		} catch (...) {
 		}
 		cout << "输入不合法，请重新输入一个数字。" << endl;
