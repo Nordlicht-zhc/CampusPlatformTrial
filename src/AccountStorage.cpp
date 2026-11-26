@@ -8,28 +8,32 @@
 using namespace std;
 
 static const char* account_file = "data/platform_accounts_plain.txt";
-static const char* account_file_header = "CAMPUS_ACCOUNTS_V2";
+static const char* account_file_header = "CAMPUS_ACCOUNTS_V3";
 
-// 校验账号文件中的格式、权限、重复学号及启用的账号管理员。
+// V2 的非零权限值读作管理员身份。V3 只存 0（学生）和 1（管理员）。
 bool AccountManager::load() {
 	errno = 0;
 	ifstream in(account_file);
 	if (!in)
 		return errno == ENOENT;
 	string line;
-	if (!getline(in, line) || line != account_file_header)
+	if (!getline(in, line))
 		return false;
+	const bool legacy = line == "CAMPUS_ACCOUNTS_V2";
+	if (!legacy && line != account_file_header)
+		return false;
+	const int max_role = legacy ? 15 : 1;
 
 	bool has_admin = false;
 	while (getline(in, line)) {
 		istringstream row(line);
 		Account account{};
-		int active;
+		int role, active;
 		string excess;
-		if (!(row >> account.username >> account.student_id >> account.permissions >> active) ||
+		if (!(row >> account.username >> account.student_id >> role >> active) ||
 			row >> excess ||
 			!validUsername(account.username) || find(account.username) != nullptr ||
-			account.permissions < 0 || account.permissions > AllPermissions ||
+			role < 0 || role > max_role ||
 			(active != 0 && active != 1))
 			return false;
 
@@ -40,13 +44,14 @@ bool AccountManager::load() {
 
 		if (account.student_id == "-")
 			account.student_id.clear();
-		if (account.student_id.empty() && account.permissions == 0)
+		account.is_admin = role != 0;
+		if (account.student_id.empty() && !account.is_admin)
 			return false;
-		if (studentIdInUse(account.student_id))
+		if (findByStudentId(account.student_id) != nullptr)
 			return false;
 
 		account.active = active == 1;
-		has_admin = has_admin || (account.active && account.has(ManageAccounts));
+		has_admin = has_admin || (account.active && account.is_admin);
 		accounts.push_back(account);
 	}
 	return in.eof() && has_admin;
@@ -59,7 +64,7 @@ bool AccountManager::save()const {
 	out << account_file_header << '\n';
 	for (const Account& account : accounts) {
 		out << account.username << ' ' << (account.student_id.empty() ? "-" : account.student_id)
-			<< ' ' << account.permissions << ' ' << account.active << '\n'
+			<< ' ' << account.is_admin << ' ' << account.active << '\n'
 			<< account.password << '\n';
 	}
 	out.close();

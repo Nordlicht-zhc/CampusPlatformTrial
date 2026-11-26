@@ -10,6 +10,8 @@
 #include <string>
 using namespace std;
 
+class AccountManager;
+
 // 学业管理系统核心类，统一持有人员、课程、成绩三类业务数据
 // 负责业务处理和文件的加载与保存，是子系统的调度中心
 class AcademicManager {
@@ -18,6 +20,7 @@ private:
 	vector<Course> courses;   // 课程容器
 	vector<Score> scores;     // 成绩容器
 	string dataDir;           // 数据文件目录
+	AccountManager& accounts;
 	bool dataReady;           // 三份学业文件都成功读取后才开放学业模块
 
 	// 内部辅助函数，对外隐藏查找细节
@@ -27,6 +30,8 @@ private:
 	string courseNameOf(const string& courseNo) const;   // 按课程号查课程名
 
 	bool loadAll();
+	bool writePeople(const string& path) const;
+	bool savePeople() const;
 	void saveAll();
 	void adminMenu();
 	void studentMenu(const string& student_id);
@@ -55,7 +60,7 @@ private:
 	void showRanking();
 
 public:
-	explicit AcademicManager(const string& dataDir);
+	AcademicManager(const string& dataDir, AccountManager& accounts);
 	~AcademicManager();
 	const Student* getStudent(const string& id) const;
 	void run(const string& student_id, bool admin);

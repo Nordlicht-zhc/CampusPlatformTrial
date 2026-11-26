@@ -1,4 +1,5 @@
 #include "AcademicManager.h"
+#include "../AccountManager.h"
 #include "Utils.h"
 #include <fstream>
 #include <algorithm>
@@ -44,7 +45,8 @@ static bool readRecords(const string& path, ParseLine parseLine) {
 }
 
 // 构造函数：记录数据目录并加载历史数据
-AcademicManager::AcademicManager(const string& dataDir) : dataDir(dataDir) {
+AcademicManager::AcademicManager(const string& dataDir, AccountManager& accounts)
+	: dataDir(dataDir), accounts(accounts) {
 	ensureDir(dataDir);
 	dataReady = loadAll();
 }
@@ -112,25 +114,42 @@ bool AcademicManager::loadAll() {
 	return peopleReady && coursesReady && scoresReady;
 }
 
+bool AcademicManager::writePeople(const string& path) const {
+	ofstream out(path);
+	for (const Person* person : people)
+		out << person->serialize() << '\n';
+	out.close();
+	return static_cast<bool>(out);
+}
+
+// 开立平台账号前，先把学籍写入正式存档。
+bool AcademicManager::savePeople() const {
+	const string path = dataDir + "/people.dat";
+	const string tempPath = path + ".tmp";
+	if (writePeople(tempPath) && MoveFileExA(tempPath.c_str(), path.c_str(),
+			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+		return true;
+	std::remove(tempPath.c_str());
+	cerr << "学业存档 " << path << " 保存失败。\n";
+	return false;
+}
+
 // 三份临时文件都写完后，再依次替换人员、课程和成绩存档。
 void AcademicManager::saveAll() {
 	const string paths[] = {dataDir + "/people.dat", dataDir + "/courses.dat", dataDir + "/scores.dat"};
 	const string tempPaths[] = {paths[0] + ".tmp", paths[1] + ".tmp", paths[2] + ".tmp"};
-	ofstream personOut(tempPaths[0]);
+	const bool peopleWritten = writePeople(tempPaths[0]);
 	ofstream courseOut(tempPaths[1]);
 	ofstream scoreOut(tempPaths[2]);
-	for (const Person* person : people)
-		personOut << person->serialize() << '\n';
 	for (const Course& course : courses)
 		courseOut << course.serialize() << '\n';
 	for (const Score& score : scores)
 		scoreOut << score.serialize() << '\n';
-	personOut.close();
 	courseOut.close();
 	scoreOut.close();
 
-	if (!personOut || !courseOut || !scoreOut) {
-		const string& failed = !personOut ? paths[0] : !courseOut ? paths[1] : paths[2];
+	if (!peopleWritten || !courseOut || !scoreOut) {
+		const string& failed = !peopleWritten ? paths[0] : !courseOut ? paths[1] : paths[2];
 		cerr << "学业存档 " << failed << " 写入失败。\n";
 	} else {
 		for (size_t i = 0; i < 3; ++i) {
@@ -170,15 +189,20 @@ void AcademicManager::run(const string& student_id, bool admin) {
 		saveAll();
 }
 
-// 录入新学生，学号查重通过后逐项采集信息
+// 录入学籍后建立学生账号。已有学籍可在同一入口补建账号。
 void AcademicManager::addStudent() {
 	string id = readLine("学号：");
-	if (id.empty() || id == "-" || id.size() > 64 || id.find_first_of("| \t") != string::npos) {
+	if (id.empty() || id == "-" || id.size() > 64 || id.find_first_of("| \t\r\n\v\f") != string::npos) {
 		cout << "请输入有效学号。" << endl;
 		return;
 	}
-	if (findPersonIndex(id) != -1) {
-		cout << "该学号已存在，不能重复录入。" << endl;
+	int index = findPersonIndex(id);
+	if (index != -1) {
+		const Student* student = dynamic_cast<const Student*>(people[index]);
+		if (student != nullptr && student->isInSchool())
+			accounts.ensureStudentAccount(id);
+		else
+			cout << "该编号已使用，请核对学号。" << endl;
 		return;
 	}
 	string name = readLine("姓名：");
@@ -190,8 +214,14 @@ void AcademicManager::addStudent() {
 	int grade = readInt("入学年级：");
 	people.push_back(new Student(id, name, gender, age, phone,
 								 major, className, grade, true));
+	if (!savePeople()) {
+		delete people.back();
+		people.pop_back();
+		return;
+	}
 	cout << "学生信息录入成功。" << endl;
-
+	if (accounts.ensureStudentAccount(id) == StudentAccountStatus::Failed)
+		cout << "学生资料已保存。可再次录入原学号补建账号。" << endl;
 }
 
 // 查询学生：支持按学号精确查询或按姓名模糊查询
@@ -522,7 +552,7 @@ void AcademicManager::studentMenu(const string& student_id) {
 void AcademicManager::adminMenu() {
 	while (true) {
 		cout << endl << "===== 学生学业管理子系统(管理端) =====" << endl;
-		cout << "1 录入学生   2 查询学生   3 修改学生   4 办理退学" << endl;
+		cout << "1 录入学生/建立账号   2 查询学生   3 修改学生   4 办理退学" << endl;
 		cout << "5 学生列表   6 排序展示   7 录入教师   8 教师列表" << endl;
 		cout << "9 录入课程  10 课程列表  11 录入成绩  12 按课程查成绩" << endl;
 		cout << "13 成绩统计 14 成绩排名" << endl;

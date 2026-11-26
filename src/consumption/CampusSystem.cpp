@@ -1,5 +1,6 @@
 // 处理账户、交易、菜单和账本。
 #include "CampusSystem.h"
+#include "../AccountManager.h"
 #include "../academic/AcademicManager.h"
 #include <windows.h>
 #include <cerrno>
@@ -13,7 +14,7 @@ using namespace std;
 
 static const char* DATA_FILE = "data/consumption/campus_data.txt";
 // 将流水编号从 1 开始，旧存档加载时读取实际的下一编号。
-CampusSystem::CampusSystem():nextRecordId(1) {}
+CampusSystem::CampusSystem(AccountManager& accounts) : nextRecordId(1), accounts(accounts) {}
 
 // student_id 为稳定的学号。返回该学号对应的卡片下标，找不到时返回 -1。
 int CampusSystem::findUser(const string& student_id) const {
@@ -189,8 +190,22 @@ void CampusSystem::addUser(const AcademicManager& academic) {
 		cout << "未找到在校学生。\n";
 		return;
 	}
+	if (findUser(student_id) != -1) {
+		cout << "该学号已开卡。\n";
+		accounts.ensureStudentAccount(student_id);
+		return;
+	}
 	if (idUsed(student_id)) {
 		cout << "该学号已有校园卡或历史流水。\n";
+		return;
+	}
+	const StudentAccountStatus accountStatus = accounts.ensureStudentAccount(student_id);
+	if (accountStatus == StudentAccountStatus::Failed) {
+		cout << "学生账号设置未完成，本次开卡取消。\n";
+		return;
+	}
+	if (accountStatus == StudentAccountStatus::Disabled) {
+		cout << "学生账号已停用，无法开通校园卡。\n";
 		return;
 	}
 

@@ -8,6 +8,7 @@
 #include <string>
 
 class AcademicManager;
+class AccountManager;
 
 // 系统持有校园卡、流水和账本日志。平台会话提供当前学生和管理权限。
 class CampusSystem {
@@ -17,6 +18,7 @@ private:
 	std::vector<Record> records;
 	long nextRecordId;
 	SecurityLog securityLog;
+	AccountManager& accounts;
 
 	bool load();
 	bool save();
@@ -36,7 +38,7 @@ private:
 	void statistics();
 public:
 	// run是对外入口，其余业务作为内部成员，避免绕过菜单随意调用。
-	CampusSystem();
+	explicit CampusSystem(AccountManager& accounts);
 	void run(const AcademicManager& academic, const std::string& student_id, bool admin);
 };
 

@@ -29,43 +29,40 @@ static bool prepareData() {
 	return true;
 }
 
-// session 提供账号权限及学号。每次显示菜单前重新核对在校状态。
-static void runPlatform(AcademicManager& academic, AccountManager& accounts, Session session) {
-	while (accounts.refresh(session)) {
+// 管理员进入管理端，学生按学号进入本人服务。
+static void runPlatform(AcademicManager& academic, AccountManager& accounts, const Session& session) {
+	while (true) {
 		const Student* student = academic.getStudent(session.student_id);
 		const bool is_student = student != nullptr && student->isInSchool();
+		const bool can_use_services = session.is_admin || is_student;
 		cout << "\n========== 校园综合服务平台 ==========\n"
 			<< "当前账号：" << session.username << '\n';
 		if (is_student)
 			cout << "学号：" << student->getId() << '\n';
-		if (is_student || session.has(ManageAcademic))
-			cout << "1. 学生学业管理\n";
-		if (is_student || session.has(ManageLibrary))
-			cout << "2. 图书管理\n";
-		if (is_student || session.has(ManageConsumption))
-			cout << "3. 校园消费\n";
-		if (session.has(ManageAccounts))
-			cout << "4. 平台账号管理\n";
+		if (can_use_services)
+			cout << "1. 学生学业管理\n2. 图书管理\n3. 校园消费\n";
+		if (session.is_admin)
+			cout << "4. 创建管理员账号\n";
 		cout << "5. 修改本人密码\n0. 注销\n";
 
 		int choice = readChoice("请选择：", 0, 5);
 		if (choice <= 0)
 			return;
 
-		if (choice == 1 && (is_student || session.has(ManageAcademic))) {
-			academic.run(session.student_id, session.has(ManageAcademic));
-		} else if (choice == 2 && (is_student || session.has(ManageLibrary))) {
+		if (choice == 1 && can_use_services) {
+			academic.run(session.student_id, session.is_admin);
+		} else if (choice == 2 && can_use_services) {
 			runCampusLibrary(session.student_id, is_student ? student->getName() : "",
-				session.has(ManageLibrary));
-		} else if (choice == 3 && (is_student || session.has(ManageConsumption))) {
-			CampusSystem consumption;
-			consumption.run(academic, session.student_id, session.has(ManageConsumption));
-		} else if (choice == 4 && session.has(ManageAccounts)) {
-			accounts.run(academic, session);
+				session.is_admin);
+		} else if (choice == 3 && can_use_services) {
+			CampusSystem consumption(accounts);
+			consumption.run(academic, session.student_id, session.is_admin);
+		} else if (choice == 4 && session.is_admin) {
+			accounts.createAdminAccount(session);
 		} else if (choice == 5) {
 			accounts.changePassword(session);
 		} else {
-			cout << "当前账号没有该功能的权限。\n";
+			cout << "当前账号不能使用该功能。\n";
 		}
 	}
 }
@@ -80,15 +77,27 @@ static int runLogin() {
 	if (!accounts.initialize())
 		return 1;
 
-	AcademicManager academic("data/academic");
+	AcademicManager academic("data/academic", accounts);
 	while (true) {
 		cout << "\n========== 校园综合服务平台 ==========\n";
 		int choice = readChoice("1 登录  0 退出：", 0, 1);
 		if (choice <= 0)
 			break;
 		Session session{};
-		if (accounts.login(session))
-			runPlatform(academic, accounts, session);
+		if (!accounts.login(session))
+			continue;
+		if (!session.is_admin) {
+			const Student* student = academic.getStudent(session.student_id);
+			if (student == nullptr) {
+				cout << "未找到账号关联的学籍，学生暂时无法登录。\n";
+				continue;
+			}
+			if (!student->isInSchool()) {
+				cout << "该学生已退学，无法登录平台。\n";
+				continue;
+			}
+		}
+		runPlatform(academic, accounts, session);
 	}
 	return 0;
 }

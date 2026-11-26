@@ -1,6 +1,4 @@
 #include "AccountManager.h"
-#include "academic/AcademicManager.h"
-#include "consumption/Input.h"
 #include <iostream>
 using namespace std;
 
@@ -15,12 +13,6 @@ static bool readField(const string& prompt, string& field, size_t max_size) {
 	return false;
 }
 
-// 权限值由各权限相加。0 表示只使用学号关联的学生服务。
-static int readPermissions() {
-	cout << "管理权限可相加（1 账号、2 学业、4 图书、8 消费，0 学生）。\n";
-	return readChoice("权限值：", 0, AllPermissions);
-}
-
 // 首次启动时建立 admin，并由操作者设置它的密码。
 bool AccountManager::initialize() {
 	if (!accounts.empty())
@@ -28,17 +20,12 @@ bool AccountManager::initialize() {
 	cout << "首次运行，请为平台管理员 admin 设置密码。\n";
 	Account admin{};
 	admin.username = "admin";
-	admin.permissions = AllPermissions;
-	admin.active = true;
+	admin.is_admin = true;
 	while (!readNewPassword(admin)) {
 		if (!cin)
 			return false;
 	}
-	accounts.push_back(admin);
-	if (save())
-		return true;
-	accounts.pop_back();
-	return false;
+	return saveNewAccount(admin);
 }
 
 // 读取账号和密码，核对启用状态、锁定状态和密码；成功后把身份复制到 session。
@@ -67,134 +54,71 @@ bool AccountManager::login(Session& session) {
 	return true;
 }
 
-// 返回平台菜单时，从账号表重新读取当前账号的状态和权限。
-bool AccountManager::refresh(Session& session) {
-	Account* account = find(session.username);
-	if (account == nullptr || !account->active)
+bool AccountManager::readUnusedUsername(string& username) {
+	if (!readField("用户名（留空返回）：", username, 32) || username.empty())
 		return false;
-	session = *account;
+	if (!validUsername(username)) {
+		cout << "用户名无效。\n";
+		return false;
+	}
+	if (find(username) != nullptr) {
+		cout << "用户名已使用。\n";
+		return false;
+	}
 	return true;
 }
 
-// session 是已登录身份。只有账号管理员能访问创建、编辑和列表功能。
-void AccountManager::run(const AcademicManager& academic, const Session& session) {
-	if (!session.has(ManageAccounts))
+void AccountManager::createAdminAccount(const Session& session) {
+	if (!session.is_admin)
 		return;
-	while (true) {
-		cout << "\n========== 平台账号管理 ==========\n";
-		int choice = readChoice("1 创建账号  2 编辑账号  3 账号列表  0 返回：", 0, 3);
-		switch (choice) {
-		case 1:
-			addAccount(academic);
-			break;
-		case 2:
-			editAccount(session.username);
-			break;
-		case 3:
-			for (const Account& account : accounts) {
-				cout << account.username << " | "
-					<< (account.student_id.empty() ? "-" : account.student_id)
-					<< " | 权限 " << account.permissions << " | "
-					<< (account.active ? "启用" : "停用") << '\n';
-			}
-			break;
-		default:
-			return;
-		}
-	}
-}
-
-// 先校验用户名和学号，再分配权限、设置密码并保存。
-void AccountManager::addAccount(const AcademicManager& academic) {
+	cout << "\n========== 创建管理员账号 ==========\n";
 	Account account{};
-	if (!readField("用户名：", account.username, 32))
+	account.is_admin = true;
+	if (!readUnusedUsername(account.username))
 		return;
-	if (!validUsername(account.username)) {
-		cout << "用户名无效。\n";
-		return;
-	}
-	if (find(account.username) != nullptr) {
-		cout << "用户名已使用。\n";
-		return;
-	}
-	if (!readField("学号（管理账号可留空）：", account.student_id, 64))
-		return;
-	if (account.student_id == "-" || account.student_id.find_first_of(" \t\r\n\v\f") != string::npos) {
-		cout << "学号格式无效，请输入不含空白字符的有效学号。\n";
-		return;
-	}
-
-	if (!account.student_id.empty()) {
-		const Student* student = academic.getStudent(account.student_id);
-		if (student == nullptr || !student->isInSchool()) {
-			cout << "未找到可绑定的在校学生。\n";
-			return;
-		}
-		if (studentIdInUse(account.student_id)) {
-			cout << "该学号已绑定平台账号。\n";
-			return;
-		}
-	}
-
-	account.permissions = readPermissions();
-	if (account.permissions < 0)
-		return;
-	if (account.student_id.empty() && account.permissions == 0) {
-		cout << "请选择管理权限或绑定学号。\n";
-		return;
-	}
 	if (!readNewPassword(account))
 		return;
+	if (saveNewAccount(account))
+		cout << "管理员账号已创建。\n";
+}
 
+// 学业录入和开卡前由各子系统确认学生身份，同一学号只建立一个账号。
+StudentAccountStatus AccountManager::ensureStudentAccount(const string& student_id) {
+	if (student_id.empty() || student_id == "-" || student_id.size() > 64 ||
+			student_id.find_first_of("| \t\r\n\v\f") != string::npos) {
+		cout << "学号格式无效，请核对学籍资料。\n";
+		return StudentAccountStatus::Failed;
+	}
+
+	const Account* existing = findByStudentId(student_id);
+	if (existing != nullptr) {
+		cout << "已关联学生账号 " << existing->username
+			 << (existing->active ? "。\n" : "（已停用）。\n");
+		return existing->active ? StudentAccountStatus::Active : StudentAccountStatus::Disabled;
+	}
+
+	Account account{};
+	account.student_id = student_id;
+	account.username = student_id;
+	if (!validUsername(account.username) || find(account.username) != nullptr) {
+		cout << "该学号无法直接用作用户名，请为学生填写另一个用户名。\n";
+		if (!readUnusedUsername(account.username))
+			return StudentAccountStatus::Failed;
+	}
+	cout << "请为学生账号 " << account.username << " 设置初始密码。\n";
+	if (!readNewPassword(account) || !saveNewAccount(account))
+		return StudentAccountStatus::Failed;
+	cout << "学生账号已创建，用户名为 " << account.username << "。\n";
+	return StudentAccountStatus::Active;
+}
+
+bool AccountManager::saveNewAccount(Account& account) {
 	account.active = true;
 	accounts.push_back(account);
 	if (save())
-		cout << "账号已创建。\n";
-	else
-		accounts.pop_back();
-}
-
-// 编辑指定账号。保留当前操作者的账号管理权限，确保始终可管理平台。
-void AccountManager::editAccount(const string& current_username) {
-	string username;
-	if (!readField("要编辑的用户名：", username, 32))
-		return;
-	Account* account = find(username);
-	if (account == nullptr) {
-		cout << "账号不存在。\n";
-		return;
-	}
-	int choice = readChoice("1 重置密码  2 分配权限  3 启用或停用  0 返回：", 0, 3);
-	if (choice <= 0)
-		return;
-	if (choice == 1) {
-		updatePassword(*account);
-		return;
-	}
-
-	const Account old = *account;
-	if (choice == 2) {
-		int permissions = readPermissions();
-		if (permissions < 0)
-			return;
-		if ((account->student_id.empty() && permissions == 0) ||
-			(username == current_username && (permissions & ManageAccounts) == 0)) {
-			cout << "该账号需要保留相应的管理权限。\n";
-			return;
-		}
-		account->permissions = permissions;
-	} else {
-		if (username == current_username) {
-			cout << "请由另一位账号管理员处理当前账号。\n";
-			return;
-		}
-		account->active = !account->active;
-	}
-
-	if (save())
-		cout << "账号已更新。\n";
-	else
-		*account = old;
+		return true;
+	accounts.pop_back();
+	return false;
 }
 
 // 修改本人密码前先核验原密码。session 只提供当前登录名，密码值读取账号表。
@@ -253,12 +177,12 @@ Account* AccountManager::find(const string& username) {
 	return nullptr;
 }
 
-bool AccountManager::studentIdInUse(const string& student_id)const {
+const Account* AccountManager::findByStudentId(const string& student_id)const {
 	if (student_id.empty())
-		return false;
+		return nullptr;
 	for (const Account& account : accounts) {
 		if (account.student_id == student_id)
-			return true;
+			return &account;
 	}
-	return false;
+	return nullptr;
 }
