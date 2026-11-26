@@ -3,6 +3,7 @@
 
 #include "Person.h"
 #include <string>
+#include <vector>
 using namespace std;
 
 // 学生类，由 Person 公有派生，在通用人员信息之外扩展学籍相关属性
@@ -30,6 +31,7 @@ public:
 
 	// 重写基类纯虚函数，完成学生特有的展示与序列化逻辑
 	void showInfo() const override;
+	static void showTable(const vector<const Student*>& students);
 	string role() const override;
 	string serialize() const override;
 

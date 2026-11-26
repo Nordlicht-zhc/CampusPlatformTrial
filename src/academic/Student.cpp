@@ -1,5 +1,7 @@
 #include "Student.h"
 #include "Utils.h"
+#include <array>
+#include <windows.h>
 
 Student::Student() : grade(0), inSchool(true) {}
 
@@ -22,11 +24,78 @@ void Student::setClassName(const string& className) { this->className = classNam
 void Student::setGrade(int grade) { this->grade = grade; }
 void Student::setInSchool(bool inSchool) { this->inSchool = inSchool; }
 
-// 以表格字段形式输出学生的完整信息
+// 中文和全角字符通常占两列，不能直接用 UTF-8 字节数对齐。
+static size_t displayWidth(const string& text) {
+	if (text.empty())
+		return 0;
+	const int bytes = static_cast<int>(text.size());
+	const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), bytes, nullptr, 0);
+	if (count == 0)
+		return text.size();
+	wstring wide(count, L'\0');
+	MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), bytes, &wide[0], count);
+
+	vector<WORD> types(count);
+	if (!GetStringTypeW(CT_CTYPE3, wide.data(), count, types.data()))
+		return wide.size();
+	size_t width = 0;
+	for (WORD type : types) {
+		if (type & C3_NONSPACING)
+			continue;
+		width += (type & (C3_FULLWIDTH | C3_IDEOGRAPH)) ? 2 : 1;
+	}
+	return width;
+}
+
+// 先按标题和当前结果确定每列宽度，再用相同的列宽输出整张表。
+void Student::showTable(const vector<const Student*>& students) {
+	using Row = array<string, 9>;
+	const Row headings = {{"学号", "姓名", "性别", "年龄", "电话", "专业", "班级", "年级", "状态"}};
+	vector<Row> rows;
+	rows.push_back(headings);
+	for (const Student* student : students) {
+		rows.push_back({{student->id, student->name, student->gender, to_string(student->age),
+			student->phone, student->major, student->className, to_string(student->grade),
+			student->inSchool ? "在校" : "已退学"}});
+	}
+
+	array<size_t, 9> widths{};
+	for (const Row& row : rows) {
+		for (size_t column = 0; column < row.size(); ++column) {
+			const size_t width = displayWidth(row[column]);
+			if (width > widths[column])
+				widths[column] = width;
+		}
+	}
+
+	const size_t spacing = 2;
+	size_t tableWidth = spacing * (widths.size() - 1);
+	for (size_t width : widths)
+		tableWidth += width;
+	CONSOLE_SCREEN_BUFFER_INFO console;
+	if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &console) &&
+			tableWidth > static_cast<size_t>(console.srWindow.Right - console.srWindow.Left + 1)) {
+		// 窗口放不下整行时按字段显示，避免数据换行后失去对应标题。
+		for (size_t row = 1; row < rows.size(); ++row) {
+			if (row > 1) cout << '\n';
+			for (size_t column = 0; column < headings.size(); ++column)
+				cout << headings[column] << "：" << rows[row][column] << '\n';
+		}
+		return;
+	}
+
+	for (const Row& row : rows) {
+		for (size_t column = 0; column < row.size(); ++column) {
+			cout << row[column];
+			if (column + 1 < row.size())
+				cout << string(widths[column] - displayWidth(row[column]) + spacing, ' ');
+		}
+		cout << '\n';
+	}
+}
+
 void Student::showInfo() const {
-	cout << id << "\t" << name << "\t" << gender << "\t" << age << "\t"
-		 << phone << "\t" << major << "\t" << className << "\t" << grade
-		 << "\t" << (inSchool ? "在校" : "已退学") << endl;
+	showTable({this});
 }
 
 // 实现基类的角色接口，返回学生角色。

@@ -209,22 +209,20 @@ void AcademicManager::queryStudent() {
 			cout << "该编号不是学生。" << endl;
 			return;
 		}
-		cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
 		s->showInfo();
 		queryScoreByStudent(id);
 	} else {
 		string name = readLine("请输入姓名关键字：");
-		bool found = false;
-		for (size_t i = 0; i < people.size(); ++i) {
-			Student* s = dynamic_cast<Student*>(people[i]);
-			if (s != NULL && s->getName().find(name) != string::npos) {
-				if (!found)
-					cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
-				s->showInfo();
-				found = true;
-			}
+		vector<const Student*> matches;
+		for (const Person* person : people) {
+			const Student* student = dynamic_cast<const Student*>(person);
+			if (student != nullptr && student->getName().find(name) != string::npos)
+				matches.push_back(student);
 		}
-		if (!found) cout << "未找到匹配的学生。" << endl;
+		if (matches.empty())
+			cout << "未找到匹配的学生。" << endl;
+		else
+			Student::showTable(matches);
 	}
 }
 
@@ -274,21 +272,21 @@ void AcademicManager::removeStudent() {
 // 显示学生列表，可选择全部或仅在校学生
 void AcademicManager::listStudents() {
 	int scope = readInt("显示范围：1 仅在校  2 全部(含退学)，请选择：");
-	cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
-	bool any = false;
-	for (size_t i = 0; i < people.size(); ++i) {
-		Student* s = dynamic_cast<Student*>(people[i]);
-		if (s == NULL) continue;
-		if (scope == 1 && !s->isInSchool()) continue;
-		s->showInfo();
-		any = true;
+	vector<const Student*> list;
+	for (const Person* person : people) {
+		const Student* student = dynamic_cast<const Student*>(person);
+		if (student != nullptr && (scope != 1 || student->isInSchool()))
+			list.push_back(student);
 	}
-	if (!any) cout << "暂无符合条件的学生记录。" << endl;
+	if (list.empty())
+		cout << "暂无符合条件的学生记录。" << endl;
+	else
+		Student::showTable(list);
 }
 
 // 排序展示：先收集学生指针，再按所选关键字排序，不改动原始存储顺序
 void AcademicManager::sortStudents() {
-	vector<Student*> list;
+	vector<const Student*> list;
 	for (size_t i = 0; i < people.size(); ++i) {
 		Student* s = dynamic_cast<Student*>(people[i]);
 		if (s != NULL && s->isInSchool()) list.push_back(s);
@@ -300,20 +298,19 @@ void AcademicManager::sortStudents() {
 	int key = readInt("排序方式：1 按学号 2 按姓名 3 按平均分，请选择：");
 	if (key == 1) {
 		sort(list.begin(), list.end(),
-			 [](Student* a, Student* b) { return a->getId() < b->getId(); });
+			 [](const Student* a, const Student* b) { return a->getId() < b->getId(); });
 	} else if (key == 2) {
 		sort(list.begin(), list.end(),
-			 [](Student* a, Student* b) { return a->getName() < b->getName(); });
+			 [](const Student* a, const Student* b) { return a->getName() < b->getName(); });
 	} else if (key == 3) {
-		sort(list.begin(), list.end(), [this](Student* a, Student* b) {
+		sort(list.begin(), list.end(), [this](const Student* a, const Student* b) {
 			return studentAverage(a->getId()) > studentAverage(b->getId());
 		});
 	} else {
 		cout << "选项无效。" << endl;
 		return;
 	}
-	cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
-	for (size_t i = 0; i < list.size(); ++i) list[i]->showInfo();
+	Student::showTable(list);
 }
 
 // 录入教师
@@ -507,10 +504,9 @@ void AcademicManager::studentMenu(const string& student_id) {
 		}
 		switch (choice) {
 			case 1: {
-				int idx = findPersonIndex(student_id);
-				if (idx != -1) {
-					cout << "学号\t姓名\t性别\t年龄\t电话\t专业\t班级\t年级\t状态" << endl;
-					people[idx]->showInfo();
+				const Student* student = getStudent(student_id);
+				if (student != nullptr) {
+					student->showInfo();
 				} else {
 					cout << "未关联有效学生信息。" << endl;
 				}
