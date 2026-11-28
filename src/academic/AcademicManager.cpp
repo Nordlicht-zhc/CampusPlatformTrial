@@ -13,9 +13,8 @@ static void ensureDir(const string& dir) {
 	CreateDirectoryA(dir.c_str(), NULL);
 }
 
-// 逐行读取记录，保留行号以便定位损坏的数据。
-template <class ParseLine>
-static bool readRecords(const string& path, ParseLine parseLine) {
+// 读取一个文本文件的全部非空行。文件不存在按空文件处理，其他原因打不开则报错
+static bool readLines(const string& path, vector<string>& lines) {
 	errno = 0;
 	ifstream in(path);
 	if (!in) {
@@ -25,21 +24,9 @@ static bool readRecords(const string& path, ParseLine parseLine) {
 		return false;
 	}
 	string line;
-	size_t lineNumber = 0;
 	while (getline(in, line)) {
-		++lineNumber;
 		if (!line.empty() && line.back() == '\r') line.pop_back();
-		if (line.empty()) continue;
-		try {
-			parseLine(line);
-		} catch (const logic_error&) {
-			cerr << "学业存档 " << path << " 第 " << lineNumber << " 行格式错误。\n";
-			return false;
-		}
-	}
-	if (in.bad() || !in.eof()) {
-		cerr << "读取学业存档 " << path << " 第 " << lineNumber + 1 << " 行失败。\n";
-		return false;
+		if (!line.empty()) lines.push_back(line);
 	}
 	return true;
 }
@@ -89,29 +76,35 @@ string AcademicManager::courseNameOf(const string& courseNo) const {
 	return idx == -1 ? courseNo : courses[idx].getCourseName();
 }
 
-// 加载人员、课程和成绩，按类型标记创建对应子类
+// 从三个数据文件分别加载人员、课程、成绩，任何一步失败都返回 false
 bool AcademicManager::loadAll() {
-	const bool peopleReady = readRecords(dataDir + "/people.dat", [this](const string& line) {
-		if (line[0] == 'S')
-			people.push_back(new Student(Student::parse(line)));
-		else if (line[0] == 'T')
-			people.push_back(new Teacher(Teacher::parse(line)));
-		else
-			throw invalid_argument("invalid person type");
-	});
-	if (!peopleReady) {
-		for (Person* person : people)
-			delete person;
-		people.clear();
-	}
+	vector<string> personLines, courseLines, scoreLines;
+	if (!readLines(dataDir + "/people.dat", personLines) ||
+		!readLines(dataDir + "/courses.dat", courseLines) ||
+		!readLines(dataDir + "/scores.dat", scoreLines))
+		return false;
 
-	const bool coursesReady = readRecords(dataDir + "/courses.dat", [this](const string& line) {
-		courses.push_back(Course::parse(line));
-	});
-	const bool scoresReady = readRecords(dataDir + "/scores.dat", [this](const string& line) {
-		scores.push_back(Score::parse(line));
-	});
-	return peopleReady && coursesReady && scoresReady;
+	// 文件里有格式不对的记录时，parse 会抛出异常，在这里统一接住
+	try {
+		for (size_t i = 0; i < personLines.size(); ++i) {
+			const string& line = personLines[i];
+			if (line[0] == 'S') {
+				people.push_back(new Student(Student::parse(line)));
+			} else if (line[0] == 'T') {
+				people.push_back(new Teacher(Teacher::parse(line)));
+			}
+		}
+
+		for (size_t i = 0; i < courseLines.size(); ++i)
+			courses.push_back(Course::parse(courseLines[i]));
+
+		for (size_t i = 0; i < scoreLines.size(); ++i)
+			scores.push_back(Score::parse(scoreLines[i]));
+	} catch (...) {
+		cerr << "学业存档内容有错误，读取失败。\n";
+		return false;
+	}
+	return true;
 }
 
 bool AcademicManager::writePeople(const string& path) const {
@@ -122,46 +115,33 @@ bool AcademicManager::writePeople(const string& path) const {
 	return static_cast<bool>(out);
 }
 
-// 开立平台账号前，先把学籍写入正式存档。
+// 把人员列表直接写入 people.dat，成功返回 true
 bool AcademicManager::savePeople() const {
-	const string path = dataDir + "/people.dat";
-	const string tempPath = path + ".tmp";
-	if (writePeople(tempPath) && MoveFileExA(tempPath.c_str(), path.c_str(),
-			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-		return true;
-	std::remove(tempPath.c_str());
-	cerr << "学业存档 " << path << " 保存失败。\n";
-	return false;
+	return writePeople(dataDir + "/people.dat");
 }
 
-// 三份临时文件都写完后，再依次替换人员、课程和成绩存档。
+// 把人员、课程、成绩三份数据分别写入各自的存档文件，哪个失败就报哪个
 void AcademicManager::saveAll() {
-	const string paths[] = {dataDir + "/people.dat", dataDir + "/courses.dat", dataDir + "/scores.dat"};
-	const string tempPaths[] = {paths[0] + ".tmp", paths[1] + ".tmp", paths[2] + ".tmp"};
-	const bool peopleWritten = writePeople(tempPaths[0]);
-	ofstream courseOut(tempPaths[1]);
-	ofstream scoreOut(tempPaths[2]);
+	const string peoplePath = dataDir + "/people.dat";
+	const string coursePath = dataDir + "/courses.dat";
+	const string scorePath = dataDir + "/scores.dat";
+
+	if (!writePeople(peoplePath))
+		cerr << "学业存档 " << peoplePath << " 保存失败。\n";
+
+	ofstream courseOut(coursePath);
 	for (const Course& course : courses)
 		courseOut << course.serialize() << '\n';
+	courseOut.close();
+	if (!courseOut)
+		cerr << "学业存档 " << coursePath << " 保存失败。\n";
+
+	ofstream scoreOut(scorePath);
 	for (const Score& score : scores)
 		scoreOut << score.serialize() << '\n';
-	courseOut.close();
 	scoreOut.close();
-
-	if (!peopleWritten || !courseOut || !scoreOut) {
-		const string& failed = !peopleWritten ? paths[0] : !courseOut ? paths[1] : paths[2];
-		cerr << "学业存档 " << failed << " 写入失败。\n";
-	} else {
-		for (size_t i = 0; i < 3; ++i) {
-			if (!MoveFileExA(tempPaths[i].c_str(), paths[i].c_str(),
-					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-				cerr << "学业存档 " << paths[i] << " 替换失败。\n";
-				break;
-			}
-		}
-	}
-	for (const string& path : tempPaths)
-		std::remove(path.c_str());
+	if (!scoreOut)
+		cerr << "学业存档 " << scorePath << " 保存失败。\n";
 }
 
 // id 为学号。查到人员后检查其实际类型，学生和教师共用人员表。
